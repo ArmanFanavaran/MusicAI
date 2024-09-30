@@ -13,7 +13,9 @@ we must add iis_users to all folders security section listed in config bellow. s
   }
 
 some times the license must be placed on path :   C:\Windows\System32\config\systemprofile\AppData\Local\AnthemScore instead of 
-C:\\Users\\Administrator\\AppData\\Local. so we face with not found lincense file we can move license file to new location. 
+C:\\Users\\Administrator\\AppData\\Local. so when we face with not found lincense file we can move license file to new location. 
 we also can look for a file named : license_activation_code to find location of the license files
 
 the build code of anthem score is in this link : https://www.lunaverus.com/download. we must install it in path : C:\\Program Files\\AnthemScore so the configs in .net app can find it and run it
+
+in future we cane use abrarvan for load balancing of the project so, we can have several musicai server to handle request.
