@@ -1,0 +1,47 @@
+﻿@page
+@model MusicAI.Pages.VoiceHub.IndexModel
+@{
+}
+<h1>Real-Time Voice Chat</h1>
+
+<button id="startRecording">Start Recording</button>
+<button id="stopRecording">Stop Recording</button>
+<audio id="audioPlayback" controls></audio>
+
+<script src="~/js/signalr.min.js"></script>
+
+<script>
+    const connection = new signalR.HubConnectionBuilder().withUrl("/voiceHub").build();
+    const audioChunks = [];
+
+    connection.start().then(() => console.log("SignalR Connected")).catch(err => console.error(err.toString()));
+
+    connection.on("ReceiveVoiceChunk", (voiceChunk) => {
+        const blob = new Blob([voiceChunk], { type: 'audio/webm' });
+        audioChunks.push(blob);
+        const audioURL = URL.createObjectURL(new Blob(audioChunks));
+        document.getElementById('audioPlayback').src = audioURL;
+    });
+
+    let mediaRecorder;
+
+    document.getElementById('startRecording').addEventListener('click', async () => {
+        const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+        mediaRecorder = new MediaRecorder(stream);
+
+        mediaRecorder.ondataavailable = (event) => {
+            const reader = new FileReader();
+            reader.onload = function () {
+                const arrayBuffer = this.result;
+                connection.invoke("SendVoiceChunk", arrayBuffer).catch(err => console.error(err.toString()));
+            };
+            reader.readAsArrayBuffer(event.data);
+        };
+
+        mediaRecorder.start(5000); // Slices audio into 5-second chunks
+    });
+
+    document.getElementById('stopRecording').addEventListener('click', () => {
+        mediaRecorder.stop();
+    });
+</script>

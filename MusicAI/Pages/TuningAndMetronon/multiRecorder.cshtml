@@ -1,0 +1,144 @@
+﻿@page
+@model MusicAI.Pages.TuningAndMetronon.multiRecorderModel
+@{
+}
+<h1>Multi-Layer Recorder</h1>
+<button onclick="startRecording()">Start Recording</button>
+<button onclick="stopRecording()">Stop Recording</button>
+<button onclick="playAll()">Play All Layers</button>
+<button onclick="download()">Download Mix</button>
+
+@section Scripts{
+    <script>
+        let audioContext = new (window.AudioContext || window.webkitAudioContext)();
+        let mediaStream;
+        let mediaRecorder;
+        let recordedChunks = [];
+        let audioLayers = [];
+        let isRecording = false;
+
+        async function startRecording() {
+            if (isRecording) return;
+            isRecording = true;
+
+            mediaStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+            mediaRecorder = new MediaRecorder(mediaStream);
+
+            mediaRecorder.ondataavailable = (event) => {
+                if (event.data.size > 0) {
+                    recordedChunks.push(event.data);
+                }
+            };
+
+            mediaRecorder.onstop = async () => {
+                const audioBlob = new Blob(recordedChunks, { type: 'audio/webm' });
+                audioLayers.push(audioBlob);
+                recordedChunks = [];
+
+                if (audioLayers.length > 1) {
+                    const combinedAudio = await combineAudioLayers(audioLayers);
+                    audioLayers = [combinedAudio];
+                }
+
+                isRecording = false;
+            };
+
+            mediaRecorder.start();
+        }
+
+        function stopRecording() {
+            if (!isRecording) return;
+            mediaRecorder.stop();
+            mediaStream.getTracks().forEach(track => track.stop());
+        }
+
+        async function playAll() {
+            const combinedAudio = await combineAudioLayers(audioLayers);
+            const audioURL = URL.createObjectURL(combinedAudio);
+            const audio = new Audio(audioURL);
+            audio.play();
+        }
+
+        async function combineAudioLayers(layers) {
+            const audioBuffers = await Promise.all(layers.map(layer => blobToAudioBuffer(layer)));
+
+            const outputBuffer = audioContext.createBuffer(
+                audioBuffers[0].numberOfChannels,
+                audioBuffers.reduce((acc, buffer) => acc + buffer.length, 0),
+                audioBuffers[0].sampleRate
+            );
+
+            let offset = 0;
+            for (let buffer of audioBuffers) {
+                for (let channel = 0; channel < buffer.numberOfChannels; channel++) {
+                    outputBuffer.getChannelData(channel).set(buffer.getChannelData(channel), offset);
+                }
+                offset += buffer.length;
+            }
+
+            return audioBufferToBlob(outputBuffer);
+        }
+
+        function blobToAudioBuffer(blob) {
+            return new Promise((resolve, reject) => {
+                const reader = new FileReader();
+                reader.onload = () => {
+                    audioContext.decodeAudioData(reader.result, resolve, reject);
+                };
+                reader.readAsArrayBuffer(blob);
+            });
+        }
+
+        function audioBufferToBlob(buffer) {
+            const numberOfChannels = buffer.numberOfChannels;
+            const length = buffer.length * numberOfChannels * 2 + 44;
+            const arrayBuffer = new ArrayBuffer(length);
+            const view = new DataView(arrayBuffer);
+
+            // WAVE header
+            writeString(view, 0, 'RIFF');
+            view.setUint32(4, length - 8, true);
+            writeString(view, 8, 'WAVE');
+            writeString(view, 12, 'fmt ');
+            view.setUint32(16, 16, true);
+            view.setUint16(20, 1, true);
+            view.setUint16(22, numberOfChannels, true);
+            view.setUint32(24, buffer.sampleRate, true);
+            view.setUint32(28, buffer.sampleRate * 2 * numberOfChannels, true);
+            view.setUint16(32, numberOfChannels * 2, true);
+            view.setUint16(34, 16, true);
+            writeString(view, 36, 'data');
+            view.setUint32(40, length - 44, true);
+
+            // PCM samples
+            let offset = 44;
+            for (let i = 0; i < buffer.length; i++) {
+                for (let channel = 0; channel < numberOfChannels; channel++) {
+                    const sample = buffer.getChannelData(channel)[i];
+                    const intSample = sample < 0 ? sample * 32768 : sample * 32767;
+                    view.setInt16(offset, intSample, true);
+                    offset += 2;
+                }
+            }
+
+            return new Blob([arrayBuffer], { type: 'audio/wav' });
+        }
+
+        function writeString(view, offset, string) {
+            for (let i = 0; i < string.length; i++) {
+                view.setUint8(offset + i, string.charCodeAt(i));
+            }
+        }
+
+        async function download() {
+            const combinedAudio = await combineAudioLayers(audioLayers);
+            const url = URL.createObjectURL(combinedAudio);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = 'multilayer_recording.wav';
+            document.body.appendChild(a);
+            a.click();
+            document.body.removeChild(a);
+        }
+    </script>
+}

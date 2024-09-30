@@ -1,0 +1,186 @@
+﻿@page
+@model MusicAI.Pages.Transcription.IndexModel
+<h2>Transcription</h2>
+
+<button id="startBtn" onclick="startRecording()" disabled>Start Recording</button>
+<button id="stopBtn" onclick="stopRecording()" disabled>Stop Recording</button>
+<div>
+    <h4>Transcription Result index wav:</h4>
+    <div id="transcriptionContainer" style="overflow-y: auto; height: 350px; width: 100%;"></div>
+</div>
+
+@section Scripts {
+    <script src="~/js/signalr.min.js"></script>
+    <script src="~/js/vexflow-min.js"></script>
+    <script src="~/js/opensheetmusicdisplay.min.js"></script>
+    <script src="~/js/meyda.min.js"></script>
+    @* <script src="https://unpkg.com/meyda/dist/web/meyda.min.js"></script> <!-- Meyda for onset detection --> *@
+    <script>
+        console.log(Meyda.featureExtractors); // List all available feature extractors
+        console.log("end of List all available feature extractors");
+        document.addEventListener("DOMContentLoaded", function () {
+            const connection = new signalR.HubConnectionBuilder()
+                .withUrl("/transcriptionHub")
+                .build();
+
+            connection.on("ReceiveTranscription", function (musicXml) {
+                var tempContainer = document.createElement("div");
+                var osmd = new opensheetmusicdisplay.OpenSheetMusicDisplay(tempContainer, {
+                    autoResize: true,
+                    backend: "svg",
+                    drawTitle: false,
+                });
+                osmd.load(musicXml).then(function () {
+                    osmd.render();
+                    var transcriptionContainer = document.getElementById("transcriptionContainer");
+                    transcriptionContainer.appendChild(tempContainer);
+
+                    transcriptionContainer.scrollTop = transcriptionContainer.scrollHeight;
+                    var svgElement = tempContainer.querySelector("#osmdSvgPage1");
+                    if (svgElement) {
+                        svgElement.style.height = "200px";
+                        svgElement.style.width = "auto";
+                        svgElement.style.maxWidth = "100%";
+                    }
+
+                });
+            });
+
+            connection.start().then(() => {
+                console.log("SignalR connection established.");
+                document.getElementById("startBtn").disabled = false;
+            }).catch(function (err) {
+                console.error('SignalR connection error: ', err.toString());
+            });
+
+            let mediaStream;
+            let audioContext;
+            let sourceNode;
+            let mediaRecorder;
+            let chunks = []; // To store recorded chunks
+            let currentBlobData = []; // Buffer for currently unprocessed data
+            let isProcessingChunk = false; // Locking mechanism
+            let lastCutTime = 0; // Store the time of the last cut
+            let isRecording = false;
+            let meydaAnalyzer;
+
+            async function startRecording() {
+                console.log("Start button clicked");
+                const startBtn = document.getElementById("startBtn");
+                const stopBtn = document.getElementById("stopBtn");
+                startBtn.disabled = true;
+                stopBtn.disabled = false;
+
+                // Start recording audio
+                mediaStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+                audioContext = new (window.AudioContext || window.webkitAudioContext)();
+
+                sourceNode = audioContext.createMediaStreamSource(mediaStream);
+
+                mediaRecorder = new MediaRecorder(mediaStream);
+                mediaRecorder.ondataavailable = (event) => {
+                    // Wait until no other processing is happening before pushing new data
+                    while (isProcessingChunk) {
+                        // This is a simplistic way to wait, but you can optimize with a proper event system
+                    }
+                    currentBlobData.push(event.data); // Continuously add chunks to the buffer
+                };
+                mediaRecorder.start(); // Keep the recorder running continuously
+
+                // // Meyda Analyzer for Onset Detection
+                // meydaAnalyzer = Meyda.createMeydaAnalyzer({
+                //     audioContext: audioContext,
+                //     source: sourceNode,
+                //     bufferSize: 512,
+                //     featureExtractors: ['onset'],
+                //     callback: features => {
+                //         if (features.onset) {
+                //             console.log("Onset detected!", audioContext.currentTime);
+                //             cutAndSendChunk(); // Cut the chunk and send it
+                //         }
+                //     }
+                // });
+                // meydaAnalyzer.start();
+
+                let lastRMS = 0;
+
+                const meydaAnalyzer = Meyda.createMeydaAnalyzer({
+                    audioContext: audioContext,
+                    source: sourceNode,
+                    bufferSize: 512,
+                    featureExtractors: ['rms', 'spectralFlux'],
+                    callback: (features) => {
+                        const threshold = 0.05; // Adjust threshold based on your needs
+
+                        if (features.rms - lastRMS > threshold || features.spectralFlux > threshold) {
+                            console.log('Onset detected based on RMS or Spectral Flux!');
+                            // Your onset handling logic here
+                        }
+
+                        lastRMS = features.rms; // Update last RMS for comparison
+                    }
+                });
+                meydaAnalyzer.start();
+
+                isRecording = true;
+            }
+
+            async function cutAndSendChunk() {
+                if (currentBlobData.length > 0 && !isProcessingChunk) {
+                    isProcessingChunk = true; // Lock access while processing
+
+                    // Copy current blob data to avoid race condition
+                    const blobDataCopy = [...currentBlobData];
+
+                    // Merge all the current blob data (WebM chunks)
+                    const recordedBlob = new Blob(blobDataCopy, { type: 'audio/webm' });
+
+                    // Convert the Blob to Base64 and send it
+                    const reader = new FileReader();
+                    reader.onloadend = function () {
+                        const base64String = reader.result.split(',')[1]; // Get Base64 without prefix
+                        console.log("Sending Base64 chunk: " + base64String);
+                        connection.invoke("SendAudioChunk", base64String, "roomId", 1, 1)
+                            .catch(err => console.error(err.toString()));
+                    };
+                    reader.readAsDataURL(recordedBlob); // Convert the Blob to base64 directly
+
+                    // After sending, clear the processed portion of the buffer
+                    currentBlobData = [];
+
+                    isProcessingChunk = false; // Release the lock after processing
+                }
+            }
+
+            function stopRecording() {
+                isRecording = false;
+                console.log("Stop button clicked");
+                const startBtn = document.getElementById("startBtn");
+                const stopBtn = document.getElementById("stopBtn");
+
+                startBtn.disabled = false;
+                stopBtn.disabled = true;
+
+                if (mediaRecorder.state !== "inactive") {
+                    mediaRecorder.stop();
+                }
+
+                if (meydaAnalyzer) {
+                    meydaAnalyzer.stop();
+                }
+
+                mediaStream.getTracks().forEach(track => track.stop()); // Stop the media stream
+            }
+            window.startRecording = startRecording;
+            window.stopRecording = stopRecording;
+        });
+    </script>
+    <style>
+        #transcriptionContainer svg {
+            height: 100px;
+            width: auto;
+            max-width: 100%;
+        }
+    </style>
+}
+

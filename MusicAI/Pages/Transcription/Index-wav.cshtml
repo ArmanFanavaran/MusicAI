@@ -1,0 +1,261 @@
+﻿@page
+@model MusicAI.Pages.Transcription.IndexModel
+<h2>Transcription</h2>
+
+<button id="startBtn" onclick="startRecording()" disabled>Start Recording</button>
+<button id="stopBtn" onclick="stopRecording()" disabled>Stop Recording</button>
+<div>
+    <h4>Transcription Result index wav:</h4>
+    <div id="transcriptionContainer" style="overflow-y: auto; height: 350px; width: 100%;"></div>
+</div>
+
+@section Scripts {
+    <script src="~/js/signalr.min.js"></script>
+    <script src="~/js/vexflow-min.js"></script>
+    <script src="~/js/opensheetmusicdisplay.min.js"></script>
+    <script>
+        document.addEventListener("DOMContentLoaded", function () {
+            const connection = new signalR.HubConnectionBuilder()
+                .withUrl("/transcriptionHub")
+                .build();
+
+            connection.on("ReceiveTranscription", function (musicXml) {
+                console.log("ReceiveTranscription called via server");
+                var tempContainer = document.createElement("div");
+                var osmd = new opensheetmusicdisplay.OpenSheetMusicDisplay(tempContainer, {
+                    autoResize: true,
+                    backend: "svg",
+                    drawTitle: false,
+                });
+                osmd.load(musicXml).then(function () {
+                    osmd.render();
+                    var transcriptionContainer = document.getElementById("transcriptionContainer");
+                    transcriptionContainer.appendChild(tempContainer);
+
+                    // Scroll to the bottom of the transcription container
+                    transcriptionContainer.scrollTop = transcriptionContainer.scrollHeight;
+                    // Find the SVG element by ID and set its height
+                    var svgElement = tempContainer.querySelector("#osmdSvgPage1");
+                    if (svgElement) {
+                        console.log(svgElement)
+                        svgElement.style.height = "200px";
+                        svgElement.style.width = "auto";
+                        svgElement.style.maxWidth = "100%";
+                    }
+
+                });
+
+            });
+
+            connection.start().then(() => {
+                console.log("SignalR connection established.");
+                document.getElementById("startBtn").disabled = false;
+            }).catch(function (err) {
+                console.error('SignalR connection error: ', err.toString());
+            });
+
+            let mediaStream;
+            const chunkDuration = 6000; // 5 seconds
+            const mediaRecorderPool = [];
+            const maxRecorders = 20;
+            let chunkIndex = 0;
+            let isRecording = false;
+            let recordInterval;
+            let poolLock = false;
+
+            async function initMediaRecorderPool() {
+                mediaStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+                for (let i = 0; i < maxRecorders; i++) {
+                    const mediaRecorder = createMediaRecorder(mediaStream);
+                    mediaRecorderPool.push({ recorder: mediaRecorder, busy: false });
+                }
+            }
+
+            function createMediaRecorder(stream) {
+                const options = { mimeType: 'audio/webm' }; // Use a supported format
+                const mediaRecorder = new MediaRecorder(stream, options);
+                mediaRecorder.ondataavailable = (event) => {
+                    const reader = new FileReader();
+                    reader.onload = function () {
+                        const audioBlob = new Blob([event.data], { type: 'audio/webm' });
+                        convertWebMToWAV(audioBlob).then(wavBlob => {
+                            const readerWav = new FileReader();
+                            readerWav.onload = function () {
+                                const base64String = this.result.split(',')[1];
+                                console.log("base64 chunk " + chunkIndex + " is: " + base64String);
+                                connection.invoke("SendAudioChunkBase64", base64String, "roomId", 1, 1).catch(err => console.error(err.toString()));
+                            };
+                            readerWav.readAsDataURL(wavBlob);
+                        });
+                    };
+                    reader.readAsArrayBuffer(event.data);
+                };
+                return mediaRecorder;
+            }
+
+            async function getFreeRecorder() {
+                while (poolLock) {
+                    await new Promise(resolve => setTimeout(resolve, 10));
+                }
+                poolLock = true;
+                for (let i = 0; i < mediaRecorderPool.length; i++) {
+                    if (!mediaRecorderPool[i].busy) {
+                        mediaRecorderPool[i].busy = true;
+                        poolLock = false;
+                        return mediaRecorderPool[i];
+                    }
+                }
+                poolLock = false;
+                return null;
+            }
+
+            async function startRecording() {
+                console.log("Start button clicked");
+                const startBtn = document.getElementById("startBtn");
+                const stopBtn = document.getElementById("stopBtn");
+                startBtn.disabled = true;
+                stopBtn.disabled = false;
+
+                if (!mediaStream) {
+                    await initMediaRecorderPool();
+                }
+                isRecording = true;
+
+                startRecordingChunk();
+
+                recordInterval = setInterval(() => {
+                    if (isRecording) {
+                        startRecordingChunk();
+                    } else {
+                        clearInterval(recordInterval);
+                    }
+                }, chunkDuration);
+            }
+            window.startRecording = startRecording;
+
+            async function startRecordingChunk() {
+                const recorderObj = await getFreeRecorder();
+                if (!recorderObj) {
+                    console.error("No free MediaRecorder available");
+                    return;
+                }
+
+                const mediaRecorder = recorderObj.recorder;
+
+                mediaRecorder.start();
+
+                // Stop recording after the specified chunk duration
+                setTimeout(() => {
+                    if (mediaRecorder.state !== "inactive") {
+                        mediaRecorder.stop();
+                    }
+                    recorderObj.busy = false; // Mark as free after stopping
+                }, chunkDuration - 100);
+            }
+
+            function stopRecording() {
+                isRecording = false;
+                console.log("Stop button clicked");
+                const startBtn = document.getElementById("startBtn");
+                const stopBtn = document.getElementById("stopBtn");
+
+                startBtn.disabled = false;
+                stopBtn.disabled = true;
+
+                clearInterval(recordInterval);
+
+                mediaRecorderPool.forEach(recorderObj => {
+                    if (recorderObj.recorder.state !== "inactive") {
+                        recorderObj.recorder.stop();
+                    }
+                    recorderObj.busy = false;
+                });
+
+                // if (mediaStream) {
+                //     mediaStream.getTracks().forEach(track => track.stop());
+                //     mediaStream = null;
+                // }
+            }
+            window.stopRecording = stopRecording;
+
+            function convertWebMToWAV(webmBlob) {
+                return new Promise((resolve, reject) => {
+                    const reader = new FileReader();
+                    reader.onload = () => {
+                        const webmArrayBuffer = reader.result;
+                        const audioContext = new (window.AudioContext || window.webkitAudioContext)();
+                        audioContext.decodeAudioData(webmArrayBuffer, (audioBuffer) => {
+                            const wavBuffer = audioBufferToWav(audioBuffer);
+                            const wavBlob = new Blob([wavBuffer], { type: 'audio/wav' });
+                            resolve(wavBlob);
+                        }, (error) => {
+                            reject(error);
+                        });
+                    };
+                    reader.readAsArrayBuffer(webmBlob);
+                });
+            }
+
+            function audioBufferToWav(buffer) {
+                let numOfChan = buffer.numberOfChannels,
+                    length = buffer.length * numOfChan * 2 + 44,
+                    buffer16 = new ArrayBuffer(length),
+                    view = new DataView(buffer16),
+                    channels = [], i, sample,
+                    offset = 0,
+                    pos = 0;
+
+                // write WAVE header
+                setUint32(0x46464952); // "RIFF"
+                setUint32(length - 8); // file length - 8
+                setUint32(0x45564157); // "WAVE"
+
+                setUint32(0x20746d66); // "fmt " chunk
+                setUint32(16);         // length = 16
+                setUint16(1);          // PCM (uncompressed)
+                setUint16(numOfChan);
+                setUint32(buffer.sampleRate);
+                setUint32(buffer.sampleRate * 2 * numOfChan); // avg. bytes/sec
+                setUint16(numOfChan * 2);                     // block-align
+                setUint16(16);        // 16-bit (hardcoded in this demo)
+
+                setUint32(0x61746164); // "data" - chunk
+                setUint32(length - pos - 4); // chunk length
+
+                // write interleaved data
+                for (i = 0; i < buffer.numberOfChannels; i++)
+                    channels.push(buffer.getChannelData(i));
+
+                while (pos < length) {
+                    for (i = 0; i < numOfChan; i++) {             // interleave channels
+                        sample = Math.max(-1, Math.min(1, channels[i][offset])); // clamp
+                        sample = (0.5 + sample * 32767) | 0;      // scale to 16-bit signed int
+                        view.setInt16(pos, sample, true);         // write 16-bit sample
+                        pos += 2;
+                    }
+                    offset++                                     // next source sample
+                }
+
+                return buffer16;
+
+                function setUint16(data) {
+                    view.setUint16(pos, data, true);
+                    pos += 2;
+                }
+
+                function setUint32(data) {
+                    view.setUint32(pos, data, true);
+                    pos += 4;
+                }
+            }
+        });
+    </script>
+    <style>
+        /* Ensure other styles don't affect SVGs globally */
+        #transcriptionContainer svg {
+            height: 100px;
+            width: auto;
+            max-width: 100%;
+        }
+    </style>
+}

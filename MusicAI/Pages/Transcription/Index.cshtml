@@ -1,0 +1,210 @@
+﻿@page
+@model MusicAI.Pages.Transcription.IndexModel
+<h2>Transcription</h2>
+
+<button id="startBtn" onclick="startRecording()" disabled>Start Recording</button>
+<button id="stopBtn" onclick="stopRecording()" disabled>Stop Recording</button>
+<div>
+    <h4>Transcription Result:</h4>
+    <div id="transcriptionContainer" style="overflow-y: auto; height: 350px; width: 100%;"></div>
+</div>
+
+@section Scripts {
+    <script src="~/js/signalr.min.js"></script>
+    <script src="~/js/vexflow-min.js"></script>
+    <script src="~/js/opensheetmusicdisplay.min.js"></script>
+    <script>
+        document.addEventListener("DOMContentLoaded", function () {
+
+            // define and build the socket connection
+            const connection = new signalR.HubConnectionBuilder()
+                .withUrl("/transcriptionHub")
+                .build();
+
+            // define a gate for server to send data
+            connection.on("ReceiveTranscription", function (musicXml) {
+                console.log("ReceiveTranscription called via server");
+                // Create a temporary container for the new OSMD content
+                var tempContainer = document.createElement("div");
+                var osmd = new opensheetmusicdisplay.OpenSheetMusicDisplay(tempContainer, {
+                    autoResize: true, // just an example for an option, no option is necessary.
+                    backend: "svg",
+                    drawTitle: true,
+                    // put further options here
+                });
+                var loadPromise = osmd.load(musicXml);
+                loadPromise.then(function () {
+                    osmd.render();
+                    // Append the new content to the existing container
+                    var transcriptionContainer = document.getElementById("transcriptionContainer");
+                    transcriptionContainer.appendChild(tempContainer);
+                });
+            });
+
+            // start socket from now on
+            connection.start().then(() => {
+                console.log("SignalR connection established.");
+                document.getElementById("startBtn").disabled = false;
+            }).catch(function (err) {
+                return console.error('SignalR connection error: ', err.toString());
+            });
+
+            let mediaRecorder;
+            let audioChunks = [];
+            let chunkIndex = 0;
+            const overlapDuration = 0.1; // Overlap duration in seconds (100ms)
+            let isRecording = false;
+            let mediaStream;
+            let recordInterval;
+            const chunkDuration = 5000; // 5 seconds
+
+            async function startRecording() {
+                console.log("Start button clicked");
+                const startBtn = document.getElementById("startBtn");
+                const stopBtn = document.getElementById("stopBtn");
+                startBtn.disabled = true;
+                stopBtn.disabled = false;
+
+                mediaStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+                isRecording = true;
+                // mediaRecorder = new MediaRecorder(mediaStream);
+
+                // mediaRecorder.ondataavailable = async function (event) {
+                //     audioChunks.push(event.data);
+                //     await processChunks(); // Process and send chunks continuously
+                // };
+
+                // mediaRecorder.ondataavailable = (event) => {
+                //     const reader = new FileReader();
+                //     reader.onload = function () {
+                //         const base64String = this.result.split(',')[1]; // Extract base64 part
+                //         console.log("base64 cunk : " + chunkIndex +"is : "+ base64String);
+                //         connection.invoke("SendAudioChunk", base64String, chunkIndex++).catch(err => console.error(err.toString()));
+                //     };
+                //     reader.readAsDataURL(event.data); // Read as Base64 string
+                // };
+
+                // mediaRecorder.onstop = async function () {
+                //     await processChunks(true); // Process remaining chunks
+                //     audioChunks = []; // Clear chunks after processing
+                //     console.log("All audio chunks processed and cleared.");
+                // };
+
+                // mediaRecorder.start(5000); // Record in 1-second intervals
+                // Set up the interval for subsequent chunk recordings
+
+                // Start the first chunk recording
+                startRecordingChunk();
+
+                recordInterval = setInterval(() => {
+                    if (isRecording) {
+                        startRecordingChunk();
+                    } else {
+                        clearInterval(recordInterval);
+                    }
+                }, chunkDuration);
+            }
+            window.startRecording = startRecording;
+
+
+            function startRecordingChunk() {
+                mediaRecorder = new MediaRecorder(mediaStream);
+                mediaRecorder.ondataavailable = (event) => {
+                    const reader = new FileReader();
+                    reader.onload = function () {
+                        const base64String = this.result.split(',')[1]; // Extract base64 part
+                        console.log("base64 cunk : " + chunkIndex + "is : " + base64String);
+                        connection.invoke("SendAudioChunk", base64String, chunkIndex++).catch(err => console.error(err.toString()));
+                    };
+                    reader.readAsDataURL(event.data); // Read as Base64 string
+                };
+
+                mediaRecorder.start();
+
+                // Stop recording after the specified chunk duration
+                setTimeout(() => {
+                    mediaRecorder.stop();
+                }, chunkDuration-100);
+            }
+
+            // async function processChunks() {
+            //     if (audioChunks.length > 1) {
+            //         // Process the last two chunks to include the overlap
+            //         const start = Math.max(0, audioChunks.length - 2);
+            //         const end = audioChunks.length;
+            //         const chunkBlob = new Blob(audioChunks.slice(start, end), { type: 'audio/wav' });
+
+            //         // const arrayBuffer = await chunkBlob.arrayBuffer();
+            //         // const byteArray = new Uint8Array(arrayBuffer);
+            //         const byteArrayJsonString = await readBlobAsBase64(chunkBlob);
+            //         console.log(byteArrayJsonString);
+
+            //         console.log("before if :" + connection.state.toString());
+            //         //await connection.start();
+
+            //         // Ensure the connection is in the 'Connected' state before sending data
+            //         if (connection.state === signalR.HubConnectionState.Connected) {
+            //             console.log("in if :" + connection.state.toString());
+            //             connection.invoke("SendAudioChunk", byteArrayJsonString, chunkIndex++)
+            //             // .catch(function (err) {
+            //             //     return console.error('Error sending data: ', err.toString());
+            //             // });
+            //         } else {
+            //             console.log("else part of if condition: "+connection.state.toString());
+            //             console.warn('Cannot send data, SignalR connection is not in the Connected state.');
+            //         }
+            //     }
+            // }
+            // function readBlobAsBase64(blob) {
+            //     return new Promise((resolve, reject) => {
+            //         const reader = new FileReader();
+            //         reader.onloadend = () => {
+            //             resolve(reader.result.split(',')[1]); // Extract base64 string
+            //         };
+            //         reader.onerror = reject;
+            //         reader.readAsDataURL(blob);
+            //     });
+            // }
+
+            // async function processChunks() {
+            //     const chunkBlob = new Blob(audioChunks.splice(audioChunks.length - 1, audioChunks.length), { type: 'audio/wav' });
+            //     console.log("in process method audioChunks length: " + audioChunks.length);
+            //     // const chunkBlob = new Blob(audioChunks, { type: 'audio/wav' });
+            //     const arrayBuffer = await chunkBlob.arrayBuffer();
+            //     const byteArray = new Uint8Array(arrayBuffer);
+            //     const byteArrayJsonString = btoa(String.fromCharCode(...byteArray));
+            //     console.log(byteArrayJsonString);
+            //     console.log("before if :" + connection.state.toString());
+            //     // Ensure the connection is in the 'Connected' state before sending data
+            //     if (connection.state === signalR.HubConnectionState.Connected) {
+            //         console.log("in if :" + connection.state.toString());
+            //         connection.invoke("SendAudioChunk", byteArrayJsonString, chunkIndex++)
+            //         // .catch(function (err) {
+            //         //     return console.error('Error sending data: ', err.toString());
+            //         // });
+            //     } else {
+            //         console.log("else part of if condition: " + connection.state.toString());
+            //         console.warn('Cannot send data, SignalR connection is not in the Connected state.');
+            //     }
+            // }
+
+            function stopRecording() {
+                isRecording = false;
+                console.log("Stop button clicked");
+                const startBtn = document.getElementById("startBtn");
+                const stopBtn = document.getElementById("stopBtn");
+
+                startBtn.disabled = false;
+                stopBtn.disabled = true;
+
+                if (mediaRecorder && mediaRecorder.state !== "inactive") {
+                    mediaRecorder.stop();
+                }
+                console.log("audio chunks length:" + audioChunks.length);
+            }
+            window.stopRecording = stopRecording;
+
+        });
+    </script>
+
+}

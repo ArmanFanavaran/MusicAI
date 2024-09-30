@@ -1,0 +1,110 @@
+﻿@page
+@model MusicAI.Pages.TuningAndMetronon.tune2Model
+@{
+}
+<h1>Instrument Tuner</h1>
+<div id="pitch">-- Hz</div>
+<div id="note">--</div>
+<div id="detune">--</div>
+<button onclick="startTuning()">Start Tuning</button>
+
+@section Scripts {
+    <script>
+        let audioContext;
+        let analyser;
+        let pitchDisplay;
+        let noteDisplay;
+        let detuneDisplay;
+        let mediaStreamSource;
+
+        const noteStrings = ["C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"];
+
+        window.onload = function () {
+            pitchDisplay = document.getElementById("pitch");
+            noteDisplay = document.getElementById("note");
+            detuneDisplay = document.getElementById("detune");
+        }
+
+        async function startTuning() {
+            audioContext = new (window.AudioContext || window.webkitAudioContext)();
+            analyser = audioContext.createAnalyser();
+            analyser.fftSize = 2048;
+
+            const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+            mediaStreamSource = audioContext.createMediaStreamSource(stream);
+            mediaStreamSource.connect(analyser);
+
+            updatePitch();
+        }
+
+        function updatePitch() {
+            const buffer = new Float32Array(analyser.fftSize);
+            analyser.getFloatTimeDomainData(buffer);
+
+            const pitch = autoCorrelate(buffer, audioContext.sampleRate);
+            if (pitch !== -1) {
+                pitchDisplay.innerText = Math.round(pitch) + " Hz";
+                const note = noteFromPitch(pitch);
+                noteDisplay.innerText = noteStrings[note % 12];
+                const detune = centsOffFromPitch(pitch, note);
+                detuneDisplay.innerText = detune === 0 ? "In tune" : (detune > 0 ? "+" : "") + detune.toFixed(2) + " cents";
+            } else {
+                pitchDisplay.innerText = "-- Hz";
+                noteDisplay.innerText = "--";
+                detuneDisplay.innerText = "--";
+            }
+
+            requestAnimationFrame(updatePitch);
+        }
+
+        function autoCorrelate(buffer, sampleRate) {
+            // Implementation of the YIN algorithm or another pitch detection algorithm
+            let SIZE = buffer.length;
+            let MAX_SAMPLES = Math.floor(SIZE / 2);
+            let bestOffset = -1;
+            let bestCorrelation = 0;
+            let rms = 0;
+
+            for (let i = 0; i < SIZE; i++) {
+                rms += buffer[i] * buffer[i];
+            }
+            rms = Math.sqrt(rms / SIZE);
+            if (rms < 0.01) {
+                return -1; // Not enough signal
+            }
+
+            let lastCorrelation = 1;
+            for (let offset = 0; offset < MAX_SAMPLES; offset++) {
+                let correlation = 0;
+
+                for (let i = 0; i < MAX_SAMPLES; i++) {
+                    correlation += Math.abs((buffer[i]) - (buffer[i + offset]));
+                }
+                correlation = 1 - (correlation / MAX_SAMPLES);
+                if (correlation > bestCorrelation) {
+                    bestCorrelation = correlation;
+                    bestOffset = offset;
+                }
+            }
+            if (bestCorrelation > 0.01) {
+                let shift = (bestCorrelation - lastCorrelation) / (bestCorrelation + lastCorrelation);
+                return sampleRate / (bestOffset + shift);
+            }
+            return -1;
+        }
+
+        function noteFromPitch(frequency) {
+            let noteNum = 12 * (Math.log(frequency / 440) / Math.log(2));
+            return Math.round(noteNum) + 69;
+        }
+
+        function centsOffFromPitch(frequency, note) {
+            return 1200 * Math.log(frequency / frequencyFromNoteNumber(note)) / Math.log(2);
+        }
+
+        function frequencyFromNoteNumber(note) {
+            return 440 * Math.pow(2, (note - 69) / 12);
+        }
+
+    </script>
+}

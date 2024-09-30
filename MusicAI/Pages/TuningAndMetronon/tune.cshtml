@@ -1,0 +1,55 @@
+﻿@page
+@model MusicAI.Pages.TuningAndMetronon.tuneModel
+@{
+}
+<h1>Music Instrument Tuner</h1>
+<div class="button-container" id="guitar">
+    <h2>Guitar Tuner</h2>
+    <button onclick="playTone('E2')">E (6th string)</button>
+    <button onclick="playTone('A2')">A (5th string)</button>
+    <button onclick="playTone('D3')">D (4th string)</button>
+    <button onclick="playTone('G3')">G (3rd string)</button>
+    <button onclick="playTone('B3')">B (2nd string)</button>
+    <button onclick="playTone('E4')">E (1st string)</button>
+</div>
+<div class="button-container" id="violin">
+    <h2>Violin Tuner</h2>
+    <button onclick="playTone('G3')">G (4th string)</button>
+    <button onclick="playTone('D4')">D (3rd string)</button>
+    <button onclick="playTone('A4')">A (2nd string)</button>
+    <button onclick="playTone('E5')">E (1st string)</button>
+</div>
+<script src="tuner.js"></script>
+
+@section Scripts {
+    <script>
+        // Define the frequency of each note
+        const frequencies = {
+            'E2': 82.41,
+            'A2': 110.00,
+            'D3': 146.83,
+            'G3': 196.00,
+            'B3': 246.94,
+            'E4': 329.63,
+            'G3': 196.00,
+            'D4': 293.66,
+            'A4': 440.00,
+            'E5': 659.25
+        };
+
+        // Create an audio context
+        const audioContext = new (window.AudioContext || window.webkitAudioContext)();
+
+        // Function to play a tone
+        function playTone(note) {
+            const frequency = frequencies[note];
+            const oscillator = audioContext.createOscillator();
+            oscillator.type = 'sine';
+            oscillator.frequency.setValueAtTime(frequency, audioContext.currentTime);
+            oscillator.connect(audioContext.destination);
+            oscillator.start();
+            oscillator.stop(audioContext.currentTime + 2); // Play the tone for 2 seconds
+        }
+    </script>
+     
+}

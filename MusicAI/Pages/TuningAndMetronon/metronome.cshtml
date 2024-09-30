@@ -1,0 +1,86 @@
+﻿@page
+@model MusicAI.Pages.TuningAndMetronon.metronomeModel
+@{
+}
+<h1>Musical Metronome</h1>
+<div>
+    <label for="bpm">Tempo (BPM): </label>
+    <input type="number" id="bpm" value="120" min="40" max="240">
+</div>
+<button onclick="startMetronome()">Start</button>
+<button onclick="stopMetronome()">Stop</button>
+@section Scripts {
+    <script>
+        let audioContext;
+        let nextNoteTime = 0.0;
+        let current16thNote = 0;
+        let tempo = 120; // BPM (beats per minute)
+        let isPlaying = false;
+        let lookahead = 25.0; // How frequently to call scheduling function (in milliseconds)
+        let scheduleAheadTime = 0.1; // How far ahead to schedule audio (sec)
+
+        const notesInQueue = []; // Notes that have been put into the web audio and may or may not have played yet
+        let timerID;
+
+        // Frequencies for the "Do Re Mi Fa Sol La Ti Do" scale (C major)
+        const scaleFrequencies = [261.63, 293.66, 329.63, 349.23, 392.00, 440.00, 493.88, 523.25];
+
+        function nextNote() {
+            const secondsPerBeat = 60.0 / tempo;
+            nextNoteTime += 0.25 * secondsPerBeat; // Add quarter note length to time
+
+            current16thNote++; // Advance the beat number, wrap to zero
+            if (current16thNote == 16) {
+                current16thNote = 0;
+            }
+        }
+
+        function scheduleNote(beatNumber, time) {
+            notesInQueue.push({ note: beatNumber, time: time });
+
+            const osc = audioContext.createOscillator();
+            const envelope = audioContext.createGain();
+
+            // Choose a note from the scale based on the beat number
+            const noteIndex = beatNumber % scaleFrequencies.length;
+            osc.frequency.value = scaleFrequencies[noteIndex];
+
+            envelope.gain.value = 1;
+            envelope.gain.exponentialRampToValueAtTime(1, time + 0.001);
+            envelope.gain.exponentialRampToValueAtTime(0.001, time + 0.2);
+
+            osc.connect(envelope);
+            envelope.connect(audioContext.destination);
+
+            osc.start(time);
+            osc.stop(time + 0.2);
+        }
+
+        function scheduler() {
+            while (nextNoteTime < audioContext.currentTime + scheduleAheadTime) {
+                scheduleNote(current16thNote, nextNoteTime);
+                nextNote();
+            }
+            timerID = window.setTimeout(scheduler, lookahead);
+        }
+
+        function startMetronome() {
+            if (isPlaying) return;
+
+            audioContext = new (window.AudioContext || window.webkitAudioContext)();
+            tempo = document.getElementById("bpm").value;
+
+            current16thNote = 0;
+            nextNoteTime = audioContext.currentTime + 0.05;
+            isPlaying = true;
+            scheduler();
+        }
+
+        function stopMetronome() {
+            isPlaying = false;
+            window.clearTimeout(timerID);
+        }
+
+
+    </script>
+}
